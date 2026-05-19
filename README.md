@@ -1,10 +1,10 @@
-# flux-snobol — SNOBOL4 Constraint Engine
+# Flux SNOBOL4 — What Pattern Matching Teaches About Constraint Pass/Fail
 
-SNOBOL4 implementation of the Flux constraint validation pipeline. Pattern matching as control flow, success/failure as the error mask.
+SNOBOL4 (1966) is a string-processing language where pattern matching is the primary control flow mechanism. It runs in academic contexts and legacy text-processing systems. This repo implements the Flux constraint engine in SNOBOL4.
 
 ## How to Read SNOBOL4
 
-SNOBOL4 (1966) is a string-processing language where pattern matching is the primary operation:
+SNOBOL4 has no block structure, no if/else, no for loops in the modern sense. Every operation succeeds or fails, and you branch accordingly.
 
 ```sno
        &ANCHOR = 1                ;* anchor patterns to start of string
@@ -36,18 +36,36 @@ MYFUNC MYFUNC = X + Y             ;* return value = function name
 ```
 
 Key ideas:
-- Every line is a statement ending at `.` (period marks statement end in label context — actually, lines are statements)
-- Labels start in column 1+, code is indented
-- `:S(label)` = goto on success, `:F(label)` = goto on failure
-- `:(label)` = unconditional goto
-- No block structure — all control flow is goto-based on pattern success/failure
-- TABLE = associative array (string keys, any values)
-- `DEFINE('FUNC(ARGS)')` declares a function; code follows the label
+- **Every operation succeeds or fails.** Pattern matching, comparison, assignment — all produce success/failure.
+- **`:S(label) :F(label)`** — goto on success / goto on failure. This IS your control flow.
+- **`:(label)`** — unconditional goto.
+- **Labels start at column 1**, code is indented. No block structure.
+- **TABLE** — associative array with string keys. SNOBOL4's primary data structure.
+- **DEFINE('FUNC(ARGS)')** — declares a function; the code follows the label.
+- **`:(RETURN)`** — explicit return from function.
+- **Comments** begin with `-*`
 
-## What SNOBOL4 Forces You to Think About
+## How the Constraint Engine Maps to SNOBOL4
 
-### 1. Success/Failure IS the Error Mask
-SNOBOL4 has no exceptions, no booleans, no error codes. Every operation either **succeeds** or **fails**, and you branch accordingly:
+| Constraint Engine Concept | SNOBOL4 Mechanism |
+|---------------------------|-------------------|
+| Constraint check (pass/fail) | Pattern match success/failure — `LT(V,LO) :S(VIOLATED)` |
+| Error mask | Accumulated goto paths — control flow IS the mask |
+| Constraint bounds storage | TABLE with composite keys: `T<'LO.3'>` = lower bound for constraint 3 |
+| Sediment layers | TABLE-based layer stack: `T<'SEDLO.3.1'>` = layer 1 correction |
+| BFS fracture | Reachability via pattern-driven traversal |
+| Pipeline stages | Labeled sections with `:S/:F` branching |
+
+```
+FLXCHECK.sno    — Core constraint checking with pattern-match flow control
+FLXFRACT.sno    — Fracture engine: BFS connectivity as reachability patterns
+FLXSEDIMNT.sno  — Sediment layer manager with TABLE-based storage
+FLXMAIN.sno     — Main program wiring the full pipeline
+```
+
+## What SNOBOL4 Teaches Us
+
+**Success/failure IS the error mask in control-flow form.** SNOBOL4 has no exceptions, no booleans, no error codes. Every operation either succeeds or fails, and you branch accordingly:
 
 ```
        LT(VALUE, LO) :S(VIOLATED)
@@ -55,36 +73,17 @@ SNOBOL4 has no exceptions, no booleans, no error codes. Every operation either *
        :(OK)
 ```
 
-This IS the constraint check. The `:S` and `:F` labels ARE the bitmask. In SNOBOL4, control flow IS the error reporting mechanism. No intermediate data structure needed.
+This IS the constraint check. The `:S` and `:F` labels ARE the bitmask. No intermediate data structure needed. In SNOBOL4, control flow IS the error reporting mechanism.
 
 This is the Maybe monad before monads (1966). Success = Just (continue), Failure = Nothing (branch to handler).
 
-### 2. TABLE as Schema-Free Storage
-SNOBOL4's TABLE is an associative array with string keys. You build composite keys: `'LO.3'` means "lower bound for constraint 3". This is essentially a flattened struct — and it teaches you that:
+Three specific lessons:
 
-- Data identity is a **string key**, not a memory address
-- "Objects" are emergent from naming conventions
-- This is the same pattern as URL routing, environment variables, and database key-value stores
+1. **Pattern matching as constraint checking.** "Is this value in range?" is a pattern. SNOBOL4 makes you think of constraint checking as pattern matching — because it is. Every constraint is a question with a yes/no answer, and the branching tells you everything.
 
-### 3. No Block Structure
-Every function is a labeled section with an explicit `:(RETURN)`. There are no nested scopes, no local variables by default. This forces you to:
-- Think about data flow, not scope
-- Use naming conventions to avoid collisions
-- Make state transitions explicit (no hidden mutations in nested closures)
+2. **TABLE as schema-free storage.** `T<'LO.3'>` means "lower bound for constraint 3." Composite string keys create emergent structure without structs. This is the same pattern as URL routing, environment variables, Redis keys, and JSON property paths. Data identity is a **string key**, not a memory address.
 
-### 4. String Processing Constraints
-SNOBOL4 makes you think of everything as pattern matching. "Is this value in range?" is a pattern. "Does this constraint exist?" is a pattern. The entire constraint engine is a pattern-matching pipeline.
-
-## The Architectural Insight
-
-**SNOBOL4's success/failure flow control IS the error mask in control-flow form.** Every constraint check is a pattern match that branches to success or failure. The accumulated goto paths form the same error mask that COBOL stores in a register.
-
-In 1966, SNOBOL4 invented:
-- The Maybe monad (success/failure branching)
-- Pattern matching as a first-class operation (now in Rust, Scala, Elixir)
-- Associative arrays as the universal data structure (now JSON, Redis, environment variables)
-
-The constraint engine doesn't need an error mask variable in SNOBOL4 — the control flow IS the mask. But we compute one anyway for interop, proving that the concept is language-independent even when the implementation differs.
+3. **No block structure forces explicit state transitions.** Every function is a labeled section with `:(RETURN)`. No nested scopes, no hidden mutations in closures. You must think about data flow, not scope. This discipline — making state transitions explicit — is exactly what constraint systems need.
 
 ## Files
 
@@ -97,9 +96,15 @@ The constraint engine doesn't need an error mask variable in SNOBOL4 — the con
 
 ## Syntax Notes
 
-These files use standard SNOBOL4 syntax as defined in Griswold, Poage, and Polonsky (1971). Conventions:
-- Labels at column 1+, code indented
-- `:S(label) :F(label)` for success/failure branching
-- `:(RETURN)` for function returns
-- TABLE for associative storage, ARRAY for indexed storage
-- Comments begin with `-*`
+Standard SNOBOL4 syntax as defined in Griswold, Poage, and Polonsky (1971). Labels at column 1+, code indented. Comments begin with `-*`.
+
+## Where to Go Next
+
+- **flux-pli** — PL/I takes the opposite approach: the error mask is a native BIT(8) data type, not control flow.
+- **flux-mumps** — MUMPS adds persistence to SNOBOL4's string-centric worldview. Globals survive process exits.
+- **flux-algol** — ALGOL 60 provides the block structure that SNOBOL4 deliberately rejects. Both perspectives teach something.
+- **flux-docs** — Full documentation: error masks, fracture-coalesce, sediment, thermodynamic analogy.
+
+## Author
+
+Forgemaster ⚒️ — Constraint Theory Ecosystem, 2026-05-19
