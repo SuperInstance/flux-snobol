@@ -1,0 +1,124 @@
+-*=====================================================================
+ * FLXSEDIMNT.SNO — Sediment layer manager for constraint bounds
+ * SNOBOL4 implementation.
+ *
+ * Sediment = accumulated corrections stored in a TABLE.
+ * SNOBOL's TABLE is associative: string keys, any values.
+ * Each layer is a set of keyed entries, not a struct.
+ *=====================================================================
+
+       &ANCHOR = 1
+       &TRIM = 1
+
+*- Sediment storage: TABLE with keys like 'CIDX.1', 'NLO.1', etc. -----
+       SEDIMENT = TABLE()
+       NLAYERS = 0
+       MAXLAYERS = 16
+       MAXCON = 8
+
+*- Constraint bounds (passed in by reference convention) ---------------
+       CTABLE = TABLE()
+
+*- =====================================================================
+ *  INITSEDIMENT: Reset sediment system
+*- =====================================================================
+       DEFINE('INITSEDIMENT()')
+INITSEDIMENT
+       NLAYERS = 0 :(RETURN)
+
+*- =====================================================================
+ *  ADDLAYER: Add a sediment correction layer
+*- =====================================================================
+       DEFINE('ADDLAYER(CIDX,NLO,NHI,TSTAMP)')
+ADDLAYER
+       NLAYERS = NLAYERS + 1
+       SEDIMENT<'CIDX.' NLAYERS> = CIDX
+       SEDIMENT<'OLO.' NLAYERS> = CTABLE<'LO.' CIDX>
+       SEDIMENT<'OHI.' NLAYERS> = CTABLE<'HI.' CIDX>
+       SEDIMENT<'NLO.' NLAYERS> = NLO
+       SEDIMENT<'NHI.' NLAYERS> = NHI
+       SEDIMENT<'TS.' NLAYERS> = TSTAMP :(RETURN)
+
+*- =====================================================================
+ *  APPLYLAYERS: Apply all sediment corrections
+*- =====================================================================
+       DEFINE('APPLYLAYERS(NCON)')
+APPLYLAYERS
+       S = 1
+ALOOP   S = GT(S, NLAYERS) :S(RETURN)
+       CIDX = SEDIMENT<'CIDX.' S>
+*-    Bounds check on constraint index
+       GT(CIDX, 0) :S(ALKPOS)
+       :(ALSKIP)
+ALKPOS  LE(CIDX, NCON) :S(ALAPPLY)
+       :(ALSKIP)
+ALAPPLY
+*-    Apply new LO if nonzero
+       NLO = SEDIMENT<'NLO.' S>
+       NE(NLO, 0) CTABLE<'LO.' CIDX> = NLO
+*-    Apply new HI if nonzero
+       NHI = SEDIMENT<'NHI.' S>
+       NE(NHI, 0) CTABLE<'HI.' CIDX> = NHI
+ALSKIP  S = S + 1 :(ALOOP)
+
+*- =====================================================================
+ *  ROLLBACKLAYER: Remove the most recent layer, restore bounds
+*- =====================================================================
+       DEFINE('ROLLBACKLAYER(NCON)')
+ROLLBACKLAYER
+       GT(NLAYERS, 0) :S(RBGO)
+       :(RETURN)
+RBGO
+       CIDX = SEDIMENT<'CIDX.' NLAYERS>
+       GT(CIDX, 0) :S(RBPOS)
+       :(RBSKIP)
+RBPOS   LE(CIDX, NCON) :S(RBRESTORE)
+       :(RBSKIP)
+RBRESTORE
+       CTABLE<'LO.' CIDX> = SEDIMENT<'OLO.' NLAYERS>
+       CTABLE<'HI.' CIDX> = SEDIMENT<'OHI.' NLAYERS>
+RBSKIP  NLAYERS = NLAYERS - 1 :(RETURN)
+
+*- =====================================================================
+ *  COUNTLAYERS: Return number of active layers
+*- =====================================================================
+       DEFINE('COUNTLAYERS()')
+COUNTLAYERS
+       COUNTLAYERS = NLAYERS :(RETURN)
+
+*- =====================================================================
+ *  SELF-TEST
+*- =====================================================================
+       OUTPUT = 'FLXSEDIMNT — SNOBOL4 Sediment Manager'
+       OUTPUT = '===================================='
+
+*-    Setup constraints
+       CTABLE<'LO.1'> = -40; CTABLE<'HI.1'> = 85
+       CTABLE<'LO.2'> = 800; CTABLE<'HI.2'> = 1200
+
+*- Test 1: Add layer
+       INITSEDIMENT()
+       ADDLAYER(1, -40, 105, 20260519)
+       EQ(NLAYERS, 1) :S(T1PASS)
+       OUTPUT = 'FAIL: Test 1' :(T1DONE)
+T1PASS  OUTPUT = 'PASS: Test 1 (layer added)'
+T1DONE
+
+*- Test 2: Apply and verify bounds updated
+       APPLYLAYERS(2)
+       EQ(CTABLE<'HI.1'>, 105) :S(T2PASS)
+       OUTPUT = 'FAIL: Test 2 (got ' CTABLE<'HI.1'> ')' :(T2DONE)
+T2PASS  OUTPUT = 'PASS: Test 2 (bounds updated)'
+T2DONE
+
+*- Test 3: Rollback restores original
+       ROLLBACKLAYER(2)
+       EQ(CTABLE<'HI.1'>, 85) :S(T3A)
+       OUTPUT = 'FAIL: Test 3a (rollback value)' :(T3DONE)
+T3A     EQ(NLAYERS, 0) :S(T3PASS)
+       OUTPUT = 'FAIL: Test 3b (layer count)' :(T3DONE)
+T3PASS  OUTPUT = 'PASS: Test 3 (rollback)'
+T3DONE
+
+       OUTPUT = 'FLXSEDIMNT self-test complete.'
+END

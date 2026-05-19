@@ -1,0 +1,169 @@
+-*=====================================================================
+ * FLXMAIN.SNO — Main program: full constraint validation pipeline
+ * SNOBOL4 implementation.
+ * Pattern matching as control flow. Success/failure IS the engine.
+ *=====================================================================
+
+       &ANCHOR = 1
+       &TRIM = 1
+
+*- Constants -----------------------------------------------------------
+       INT8MIN = -127
+       INT8MAX = 127
+       MAXCON = 8
+
+*- Constraint storage --------------------------------------------------
+       CONSTRAINTS = TABLE()
+       NCOUNT = 0
+
+*- Sensor values -------------------------------------------------------
+       SENSORS = ARRAY(MAXCON)
+       I = 1
+SMINIT  I = GT(I, MAXCON) :S(SMDONE)
+       SENSORS<I> = 0
+       I = I + 1 :(SMINIT)
+SMDONE
+
+*- Result --------------------------------------------------------------
+       ERRORMASK = 0
+       VIOLATED = 0
+       TOTALSEVERITY = 0
+       PASSED = 'Y'
+
+*- Sediment ------------------------------------------------------------
+       SEDIMENT = TABLE()
+       NSED = 0
+
+*- =====================================================================
+ *  Procedures (inline)
+ *- =====================================================================
+
+*- ADDCONSTRAINT
+       DEFINE('ADDCONSTRAINT(LO,HI,SEV)')
+ADDCONSTRAINT
+       NCOUNT = NCOUNT + 1
+       CONSTRAINTS<'LO.' NCOUNT> = LO
+       CONSTRAINTS<'HI.' NCOUNT> = HI
+       CONSTRAINTS<'SEV.' NCOUNT> = SEV
+       :(RETURN)
+
+*- SATURATE
+       DEFINE('SATURATE()')
+SATURATE
+       I = 1
+SATLOOP I = GT(I, NCOUNT) :S(SATRET)
+       LT(SENSORS<I>, INT8MIN) :S(SATLO)
+       GT(SENSORS<I>, INT8MAX) :S(SATHI)
+       :(SATNEXT)
+SATLO   SENSORS<I> = INT8MIN :(SATNEXT)
+SATHI   SENSORS<I> = INT8MAX
+SATNEXT I = I + 1 :(SATLOOP)
+SATRET  :(RETURN)
+
+*- ADDSEDIMENT
+       DEFINE('ADDSEDIMENT(CIDX,NLO,NHI)')
+ADDSEDIMENT
+       NSED = NSED + 1
+       SEDIMENT<'CIDX.' NSED> = CIDX
+       SEDIMENT<'NLO.' NSED> = NLO
+       SEDIMENT<'NHI.' NSED> = NHI
+       :(RETURN)
+
+*- APPLYSEDIMENT
+       DEFINE('APPLYSEDIMENT()')
+APPLYSEDIMENT
+       S = 1
+ASLOOP  S = GT(S, NSED) :S(ASRET)
+       CIDX = SEDIMENT<'CIDX.' S>
+       NLO = SEDIMENT<'NLO.' S>
+       NHI = SEDIMENT<'NHI.' S>
+       NE(NLO, 0) CONSTRAINTS<'LO.' CIDX> = NLO
+       NE(NHI, 0) CONSTRAINTS<'HI.' CIDX> = NHI
+       S = S + 1 :(ASLOOP)
+ASRET   :(RETURN)
+
+*- CHECKCONSTRAINTS
+       DEFINE('CHECKCONSTRAINTS()')
+CHECKCONSTRAINTS
+       ERRORMASK = 0; VIOLATED = 0; PASSED = 'Y'
+       I = 1
+CCLOOP  I = GT(I, NCOUNT) :S(CCRET)
+       V = SENSORS<I>
+       LO = CONSTRAINTS<'LO.' I>
+       HI = CONSTRAINTS<'HI.' I>
+       LT(V, LO) :S(CCVIOL)
+       GT(V, HI) :S(CCVIOL)
+       :(CCOK)
+CCVIOL  VIOLATED = VIOLATED + 1
+*-    Compute bit position
+       BITVAL = 1; J = 1
+CCBIT   J = GE(J, I) :S(CBDONE)
+       BITVAL = BITVAL * 2
+       J = J + 1 :(CCBIT)
+CBDONE  ERRORMASK = ERRORMASK + BITVAL
+       PASSED = 'N'
+CCOK    I = I + 1 :(CCLOOP)
+CCRET   :(RETURN)
+
+*- COMPUTESEVERITY
+       DEFINE('COMPUTESEVERITY()')
+COMPUTESEVERITY
+       SEVSUM = 0
+       I = 1
+CSLOOP  I = GT(I, NCOUNT) :S(CSDONE)
+       BITVAL = 1; J = 1
+CSBIT   J = GE(J, I) :S(CSBDONE)
+       BITVAL = BITVAL * 2; J = J + 1 :(CSBIT)
+CSBDONE REM = REMDR(ERRORMASK, BITVAL * 2)
+       GE(REM, BITVAL) :S(CSADD)
+       :(CSNEXT)
+CSADD   SEVSUM = SEVSUM + CONSTRAINTS<'SEV.' I>
+CSNEXT  I = I + 1 :(CSLOOP)
+CSDONE  TOTALSEVERITY = SEVSUM :(RETURN)
+
+*- VALIDATEALL
+       DEFINE('VALIDATEALL()')
+VALIDATEALL
+       SATURATE()
+       APPLYSEDIMENT()
+       CHECKCONSTRAINTS()
+       COMPUTESEVERITY() :(RETURN)
+
+*- =====================================================================
+ *  MAIN
+ *- =====================================================================
+       OUTPUT = 'FLXMAIN — SNOBOL4 Flux Pipeline'
+       OUTPUT = '================================'
+
+*- Register constraints
+       ADDCONSTRAINT(-40, 85, 1)
+       ADDCONSTRAINT(800, 1200, 2)
+       ADDCONSTRAINT(0, 50, 1)
+       ADDCONSTRAINT(-10, 10, 3)
+       OUTPUT = 'Constraints: ' NCOUNT ' registered'
+
+*- Scenario 1: All pass
+       SENSORS<1> = 25; SENSORS<2> = 900
+       SENSORS<3> = 12; SENSORS<4> = 0
+       VALIDATEALL()
+       OUTPUT = 'Scenario 1: mask=' ERRORMASK ' sev=' TOTALSEVERITY
+       IDENT(PASSED, 'Y') 'ALL PASS'
+
+*- Scenario 2: Multiple violations
+       SENSORS<1> = 100; SENSORS<2> = 500
+       SENSORS<3> = 60; SENSORS<4> = 20
+       VALIDATEALL()
+       OUTPUT = 'Scenario 2: mask=' ERRORMASK ' sev=' TOTALSEVERITY
+*-    Expected: bits 0,1,2,3 set = mask 15, severity 1+2+1+3 = 7
+
+*- Scenario 3: Sediment correction
+       NSED = 0
+       ADDSEDIMENT(1, -40, 105)
+       SENSORS<1> = 95; SENSORS<2> = 900
+       SENSORS<3> = 12; SENSORS<4> = 0
+       VALIDATEALL()
+       OUTPUT = 'Scenario 3: mask=' ERRORMASK
+       IDENT(PASSED, 'Y') 'PASS with sediment'
+
+       OUTPUT = 'FLXMAIN complete.'
+END

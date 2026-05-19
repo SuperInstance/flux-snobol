@@ -1,0 +1,223 @@
+-*=====================================================================
+ * FLXCHECK.SNO — THE CORE: Constraint checking via pattern matching
+ * SNOBOL4 implementation.
+ *
+ * THE INSIGHT: SNOBOL4's pattern matching succeeds or fails.
+ * Constraint checking succeeds or fails.
+ * The :S(label) :F(label) goto-on-success/failure IS the error mask
+ * in control-flow form. SNOBOL had this in 1966.
+ *=====================================================================
+
+       &ANCHOR = 1
+       &TRIM = 1
+
+*- Constants -----------------------------------------------------------
+       INT8MIN = -127
+       INT8MAX = 127
+       MAXCON = 8
+       MAXSED = 16
+       TWO = 2
+
+*- Constraint storage: TABLE with string keys --------------------------
+       CONSTRAINTS = TABLE()
+       NCOUNT = 0
+
+*- Sensor values: ARRAY ------------------------------------------------
+       SENSORS = ARRAY(MAXCON)
+       SENSORS<1> = 0
+       SENSORS<2> = 0
+       SENSORS<3> = 0
+       SENSORS<4> = 0
+       SENSORS<5> = 0
+       SENSORS<6> = 0
+       SENSORS<7> = 0
+       SENSORS<8> = 0
+
+*- Result variables ----------------------------------------------------
+       ERRORMASK = 0
+       VIOLATED = 0
+       TOTALSEVERITY = 0
+       PASSED = 'Y'
+
+*- Sediment storage: TABLE indexed by layer number ---------------------
+       SEDIMENT = TABLE()
+       NSED = 0
+
+*- =====================================================================
+ *  ADDCONSTRAINT: Register a constraint
+ *  Key format: 'LO.n' 'HI.n' 'SEV.n' for constraint index n
+*- =====================================================================
+       DEFINE('ADDCONSTRAINT(LO,HI,SEV)')
+ADDCONSTRAINT
+       NCOUNT = NCOUNT + 1
+       CONSTRAINTS<'LO.' NCOUNT> = LO
+       CONSTRAINTS<'HI.' NCOUNT> = HI
+       CONSTRAINTS<'SEV.' NCOUNT> = SEV
+       NCOUNT = NCOUNT :(RETURN)
+
+*- =====================================================================
+ *  SATURATE: Clamp all sensor values to INT8 range
+*- =====================================================================
+       DEFINE('SATURATE()')
+SATURATE
+       I = 1
+SATLOOP I = GT(I, NCOUNT) :S(RETURN)
+       SENSORS<I> = LT(SENSORS<I>, INT8MIN) INT8MIN :S(SATNEXT)
+       SENSORS<I> = GT(SENSORS<I>, INT8MAX) INT8MAX :S(SATNEXT)
+       :(SATNEXT)
+SATNEXT I = I + 1 :(SATLOOP)
+
+*- =====================================================================
+ *  APPLYSEDIMENT: Layer corrections onto constraint bounds
+*- =====================================================================
+       DEFINE('APPLYSEDIMENT()')
+APPLYSEDIMENT
+       S = 1
+SEDLOOP S = GT(S, NSED) :S(RETURN)
+       CIDX = SEDIMENT<'CIDX.' S>
+       EQ(CIDX, 0) :S(SEDSKIP)
+*-    Apply new LO if specified (nonzero)
+       NLO = SEDIMENT<'NLO.' S>
+       NEWHI = SEDIMENT<'NHI.' S>
+       NE(NLO, 0) CONSTRAINTS<'LO.' CIDX> = NLO
+       NE(NEWHI, 0) CONSTRAINTS<'HI.' CIDX> = NEWHI
+SEDSKIP S = S + 1 :(SEDLOOP)
+
+*- =====================================================================
+ *  CHECKCONSTRAINTS: Compare each sensor to its bounds
+ *  Uses the SNOBOL pattern-match idiom:
+ *    value = LT(value, lo) 'VIOLATE' :S(VIOLATED)
+ *    value = GT(value, hi) 'VIOLATE' :S(VIOLATED)
+ *    :(OK)
+ *  The success/failure flow IS the bitmask in control-flow form.
+*- =====================================================================
+       DEFINE('CHECKCONSTRAINTS()')
+CHECKCONSTRAINTS
+       ERRORMASK = 0
+       VIOLATED = 0
+       PASSED = 'Y'
+       I = 1
+CCLOOP  I = GT(I, NCOUNT) :S(RETURN)
+       V = SENSORS<I>
+       LO = CONSTRAINTS<'LO.' I>
+       HI = CONSTRAINTS<'HI.' I>
+*-    Check violation: LT(value, lo) → success means violated
+       LT(V, LO) :S(CCVIOL)
+*-    Check violation: GT(value, hi) → success means violated
+       GT(V, HI) :S(CCVIOL)
+       :(CCOK)
+CCVIOL  VIOLATED = VIOLATED + 1
+*-    Compute bitmask: 2^(I-1) by repeated doubling
+       BITVAL = 1
+       J = 1
+CCBIT   J = GE(J, I) :S(CCBITDONE)
+       BITVAL = BITVAL * TWO
+       J = J + 1 :(CCBIT)
+CCBITDONE ERRORMASK = ERRORMASK + BITVAL
+       PASSED = 'N'
+CCOK    I = I + 1 :(CCLOOP)
+
+*- =====================================================================
+ *  COMPUTESEVERITY: Sum severities of violated constraints
+*- =====================================================================
+       DEFINE('COMPUTESEVERITY()')
+COMPUTESEVERITY
+       SEVSUM = 0
+       I = 1
+CSLOOP  I = GT(I, NCOUNT) :S(CSDONE)
+*-    Compute bitmask for position I
+       BITVAL = 1
+       J = 1
+CSBIT   J = GE(J, I) :S(CSBITDONE)
+       BITVAL = BITVAL * TWO
+       J = J + 1 :(CSBIT)
+CSBITDONE
+*-    Test if bit I-1 is set in ERRORMASK
+       REM = REMDR(ERRORMASK, BITVAL * TWO)
+       GE(REM, BITVAL) :S(CSADD)
+       :(CSNEXT)
+CSADD   SEVSUM = SEVSUM + CONSTRAINTS<'SEV.' I>
+CSNEXT  I = I + 1 :(CSLOOP)
+CSDONE  TOTALSEVERITY = SEVSUM :(RETURN)
+
+*- =====================================================================
+ *  VALIDATEALL: Full pipeline
+*- =====================================================================
+       DEFINE('VALIDATEALL()')
+VALIDATEALL
+       SATURATE()
+       APPLYSEDIMENT()
+       CHECKCONSTRAINTS()
+       COMPUTESEVERITY() :(RETURN)
+
+*- =====================================================================
+ *  ADDSEDIMENT: Add a sediment correction layer
+*- =====================================================================
+       DEFINE('ADDSEDIMENT(CIDX,NLO,NHI)')
+ADDSEDIMENT
+       NSED = NSED + 1
+       SEDIMENT<'CIDX.' NSED> = CIDX
+       SEDIMENT<'OLO.' NSED> = CONSTRAINTS<'LO.' CIDX>
+       SEDIMENT<'OHI.' NSED> = CONSTRAINTS<'HI.' CIDX>
+       SEDIMENT<'NLO.' NSED> = NLO
+       SEDIMENT<'NHI.' NSED> = NEWHI
+       NSED = NSED :(RETURN)
+
+*- =====================================================================
+ *  SELF-TEST
+*- =====================================================================
+       OUTPUT = 'FLXCHECK — SNOBOL4 Constraint Engine'
+       OUTPUT = '===================================='
+
+*- Test 1: All in bounds
+       NCOUNT = 0; NSED = 0
+       ADDCONSTRAINT(-40, 85, 1)
+       ADDCONSTRAINT(800, 1200, 2)
+       ADDCONSTRAINT(0, 50, 1)
+       SENSORS<1> = 25; SENSORS<2> = 900; SENSORS<3> = 12
+       VALIDATEALL()
+       IDENT(PASSED, 'Y') :S(T1PASS)
+       OUTPUT = 'FAIL: Test 1 (all pass)' :(T1DONE)
+T1PASS  OUTPUT = 'PASS: Test 1 (all in bounds)'
+T1DONE
+
+*- Test 2: Temperature violation
+       SENSORS<1> = 100
+       VALIDATEALL()
+       IDENT(PASSED, 'Y') :S(T2FAIL)
+       OUTPUT = 'PASS: Test 2 (temp caught)' :(T2DONE)
+T2FAIL  OUTPUT = 'FAIL: Test 2 (violation missed)'
+T2DONE
+
+*- Test 3: Boundary — exactly at LO
+       NCOUNT = 0; ADDCONSTRAINT(-40, 85, 1)
+       SENSORS<1> = -40
+       VALIDATEALL()
+       IDENT(PASSED, 'Y') :S(T3PASS)
+       OUTPUT = 'FAIL: Test 3 (boundary LO)' :(T3DONE)
+T3PASS  OUTPUT = 'PASS: Test 3 (boundary LO pass)'
+T3DONE
+
+*- Test 4: INT8 saturation
+       SENSORS<1> = -200
+       SATURATE()
+       EQ(SENSORS<1>, INT8MIN) :S(T4PASS)
+       OUTPUT = 'FAIL: Test 4 (saturate)' :(T4DONE)
+T4PASS  OUTPUT = 'PASS: Test 4 (INT8 saturate)'
+T4DONE
+
+*- Test 5: Sediment correction
+       NCOUNT = 0; NSED = 0
+       ADDCONSTRAINT(-40, 85, 1)
+       ADDCONSTRAINT(800, 1200, 2)
+       ADDCONSTRAINT(0, 50, 1)
+       ADDSEDIMENT(1, -40, 105)
+       SENSORS<1> = 95; SENSORS<2> = 900; SENSORS<3> = 12
+       VALIDATEALL()
+       IDENT(PASSED, 'Y') :S(T5PASS)
+       OUTPUT = 'FAIL: Test 5 (sediment)' :(T5DONE)
+T5PASS  OUTPUT = 'PASS: Test 5 (sediment extended bounds)'
+T5DONE
+
+       OUTPUT = 'FLXCHECK self-test complete.'
+END

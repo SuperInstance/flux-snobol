@@ -1,0 +1,169 @@
+-*=====================================================================
+ * FLXFRACT.SNO — Fracture engine: decompose constraint systems into
+ * independent blocks via bipartite graph BFS.
+ * SNOBOL4 implementation.
+ *
+ * SNOBOL insight: Every operation is pattern match.
+ * Graph connectivity IS reachability testing.
+ * "Can I reach node B from node A?" is a pattern match.
+ *=====================================================================
+
+       &ANCHOR = 1
+       &TRIM = 1
+
+*- Adjacency as TABLE: 'ADJ.i.j' = 1 if constraint i depends on dim j -
+       ADJTAB = TABLE()
+       MAXC = 8
+       MAXD = 8
+
+*- Block storage -------------------------------------------------------
+       BLOCKS = TABLE()
+       NBLOCKS = 0
+
+*- BFS work variables --------------------------------------------------
+       VISCON = ARRAY(MAXC)
+       VISDIM = ARRAY(MAXD)
+       QUEUE = ARRAY(64)
+       QHEAD = 0; QTAIL = 0
+
+*- =====================================================================
+ *  BUILDDEPGRAPH: Diagonal adjacency — constraint i checks dim i
+*- =====================================================================
+       DEFINE('BUILDDEPGRAPH(NC,ND)')
+BUILDDEPGRAPH
+       I = 1
+BDGOUTER I = GT(I, NC) :S(BDGRETURN)
+       J = 1
+BDGINNER J = GT(J, ND) :S(BDGNEXT)
+       ADJTAB<'A.' I '.' J> = 0
+       J = J + 1 :(BDGINNER)
+BDGNEXT I = I + 1 :(BDGOUTER)
+BDGRETURN
+*-     Diagonal
+       I = 1
+BDGDIAG I = GT(I, NC) :S(RETURN)
+       GT(I, ND) :S(BDGSKIP)
+       ADJTAB<'A.' I '.' I> = 1
+BDGSKIP I = I + 1 :(BDGDIAG)
+
+*- =====================================================================
+ *  SETEDGE: Set/clear an adjacency edge
+*- =====================================================================
+       DEFINE('SETEDGE(CI,DI,VAL)')
+SETEDGE
+       ADJTAB<'A.' CI '.' DI> = VAL :(RETURN)
+
+*- =====================================================================
+ *  GETEDGE: Get adjacency value
+*- =====================================================================
+       DEFINE('GETEDGE(CI,DI)')
+GETEDGE
+       GETEDGE = ADJTAB<'A.' CI '.' DI>
+       EQ(GETEDGE) :S(GETZERO)
+       :(RETURN)
+GETZERO GETEDGE = 0 :(RETURN)
+
+*- =====================================================================
+ *  FINDBLOCKS: BFS from each unvisited constraint
+ *  Positive queue = constraint, negative = dimension
+*- =====================================================================
+       DEFINE('FINDBLOCKS(NC,ND)')
+FINDBLOCKS
+       NBLOCKS = 0
+*-    Clear visited
+       I = 1
+FBCLR1  I = GT(I, NC) :S(FBCLR2)
+       VISCON<I> = 0
+       I = I + 1 :(FBCLR1)
+FBCLR2  I = 1
+FBCLR3  I = GT(I, ND) :S(FBBEGIN)
+       VISDIM<I> = 0
+       I = I + 1 :(FBCLR3)
+
+FBBEGIN I = 1
+FBOUTER I = GT(I, NC) :S(FBRETURN)
+       EQ(VISCON<I>, 1) :S(FBNEXT)
+*-    Start BFS from constraint I
+       NBC = 0; NBD = 0
+       QHEAD = 1; QTAIL = 1
+       QUEUE<QTAIL> = I; QTAIL = QTAIL + 1
+       VISCON<I> = 1
+*-    BFS loop
+FBQUEUE QHEAD = GE(QHEAD, QTAIL) :S(FBSTORE)
+       CUR = QUEUE<QHEAD>; QHEAD = QHEAD + 1
+       GT(CUR, 0) :S(FBCONNODE)
+*-    Dimension node (negative)
+       D = -CUR
+       NBD = NBD + 1
+       BLOCKS<'D.' NBLOCKS + 1 '.' NBD> = D
+       K = 1
+FBDIMC  K = GT(K, NC) :S(FBQUEUE)
+       EQ(VISCON<K>, 0) :S(FBDIMTEST)
+       :(FBDIMNEXT)
+FBDIMTEST EQ(GETEDGE(K, D), 1) :S(FBDIMVIS)
+       :(FBDIMNEXT)
+FBDIMVIS VISCON<K> = 1
+       QUEUE<QTAIL> = K; QTAIL = QTAIL + 1
+FBDIMNEXT K = K + 1 :(FBDIMC)
+*-    Constraint node (positive)
+FBCONNODE
+       NBC = NBC + 1
+       BLOCKS<'C.' NBLOCKS + 1 '.' NBC> = CUR
+       J = 1
+FBCOND  J = GT(J, ND) :S(FBQUEUE)
+       EQ(VISDIM<J>, 0) :S(FB CONTEST)
+       :(FBCONNEXT)
+FBCONTEST EQ(GETEDGE(CUR, J), 1) :S(FBCONVIS)
+       :(FBCONNEXT)
+FBCONVIS VISDIM<J> = 1
+       QUEUE<QTAIL> = -J; QTAIL = QTAIL + 1
+FBCONNEXT J = J + 1 :(FBCOND)
+
+*-    Store block
+FBSTORE NBLOCKS = NBLOCKS + 1
+       BLOCKS<'NC.' NBLOCKS> = NBC
+       BLOCKS<'ND.' NBLOCKS> = NBD
+FBNEXT  I = I + 1 :(FBOUTER)
+FBRETURN :(RETURN)
+
+*- =====================================================================
+ *  COALESCEMASKS: Bitwise OR via TABLE lookup
+ *  Zero false negatives by Boolean algebra: OR never loses 1s.
+*- =====================================================================
+       DEFINE('COALESCEMASKS(BMASKS,GMASK,NB,NBITS)')
+COALESCEMASKS
+       BIT = 1
+CMCLR   BIT = GT(BIT, NBITS) :S(CMOR)
+       GMASK<BIT> = 0
+       BIT = BIT + 1 :(CMCLR)
+CMOR    B = 1
+CMOUTER B = GT(B, NB) :S(CMRETURN)
+       BIT = 1
+CMINNER BIT = GT(BIT, NBITS) :S(CMNEXT)
+       EQ(BMASKS<B '.' BIT>, 1) :S(CMSET)
+       EQ(GMASK<BIT>, 1) :S(CMSET)
+       :(CMBITNEXT)
+CMSET   GMASK<BIT> = 1
+CMBITNEXT BIT = BIT + 1 :(CMINNER)
+CMNEXT  B = B + 1 :(CMOUTER)
+CMRETURN :(RETURN)
+
+*- =====================================================================
+ *  SELF-TEST
+*- =====================================================================
+       OUTPUT = 'FLXFRACT — SNOBOL4 Fracture Engine'
+       OUTPUT = '=================================='
+
+       BUILDDEPGRAPH(6, 4)
+*-    Override: constraints 1,2 share dim 1; 3,4 share dim 2
+       SETEDGE(1, 1, 1); SETEDGE(2, 1, 1)
+       SETEDGE(3, 2, 1); SETEDGE(4, 2, 1)
+       SETEDGE(5, 3, 1); SETEDGE(6, 4, 1)
+       FINDBLOCKS(6, 4)
+
+       EQ(NBLOCKS, 4) :S(FBPASS)
+       OUTPUT = 'FAIL: expected 4 blocks, got ' NBLOCKS :(FBDONE)
+FBPASS  OUTPUT = 'PASS: 4 blocks found'
+FBDONE
+       OUTPUT = 'FLXFRACT self-test complete.'
+END
